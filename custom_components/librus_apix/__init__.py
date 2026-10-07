@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import traceback
 from datetime import date
 from typing import Dict, Any
@@ -42,6 +43,33 @@ def _iso_date(d: str) -> str:
         except ValueError:
             continue
     return d
+
+
+# Linia "Klucz: wartosc" w opisie oceny (Kategoria:, Data:, Nauczyciel: ...)
+_KLUCZ_OPISU = re.compile(r"^[A-ZĄĆĘŁŃÓŚŹŻ][\w .()/-]{0,40}: ")
+
+
+def _opis_oceny(desc: str) -> str:
+    r"""Wyciagnij slowny opis oceny z pola desc biblioteki librus-apix.
+
+    librus-apix sklada desc jako "Ocena: <symbol>\nPrzedmiot: <przedmiot>\n"
+    + tresc atrybutu title. Przy ocenach tekstowych/symbolicznych (np. "T",
+    "np") w title jest dodatkowa linia "Ocena: <opis>", czasem wielowierszowa,
+    np. "Ocena: Diagnoza\n\n12/20p\n\n60%". Zwraca opis (linie laczone " · ")
+    albo "" gdy go nie ma.
+    """
+    lines = (desc or "").split("\n")[2:]  # pomijamy linie dodane przez biblioteke
+    opis = []
+    for i, line in enumerate(lines):
+        if line.startswith("Ocena: "):
+            opis.append(line[len("Ocena: "):].strip())
+            for nxt in lines[i + 1:]:
+                if _KLUCZ_OPISU.match(nxt):
+                    break
+                if nxt.strip():
+                    opis.append(nxt.strip())
+            break
+    return " · ".join(x for x in opis if x)
 
 
 def _parse_completed_lessons(html: str) -> list:
@@ -207,6 +235,7 @@ class LibrusApiClient:
                                 'teacher': getattr(grade, 'teacher', ''),
                                 'semester': grade.semester,
                                 'komentarz': komentarz_str,
+                                'opis': _opis_oceny(getattr(grade, 'desc', '')),
                                 'type': 'numeric'
                             })
 
@@ -262,6 +291,7 @@ class LibrusApiClient:
                                     'teacher': parsed_teacher,
                                     'semester': desc_grade.semester,
                                     'komentarz': parsed_comment,
+                                    'opis': _opis_oceny(desc_text),
                                     'type': 'descriptive'
                                 })
 

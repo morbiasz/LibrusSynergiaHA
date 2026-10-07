@@ -23,7 +23,7 @@ Integracja tworzy następujące sensory:
 |--------|------|---------|
 | `sensor.librus_uczen` | Informacje o uczniu (klasa, wychowawca, szkoła) | imię i nazwisko |
 | `sensor.librus_szczesliwy_numerek` | Szczęśliwy numerek dnia | numer |
-| `sensor.librus_oceny` | Wszystkie oceny bieżącego semestru | liczba ocen |
+| `sensor.librus_oceny` | Wszystkie oceny bieżącego semestru; przy ocenach tekstowych/symbolicznych (np. `T`, `np`) pole `opis` zawiera ich treść z Librusa, np. "45%" | liczba ocen |
 | `sensor.librus_srednia_ocen` | **Globalna średnia** ze wszystkich przedmiotów | float (wykres 📈) |
 | `sensor.librus_wiadomosci` | Ostatnie wiadomości (domyślnie 10, konfigurowalne do 25 w opcjach) | liczba nieprzeczytanych |
 | `sensor.librus_<przedmiot>` | Oceny z danego przedmiotu (np. `sensor.librus_matematyka`) | lista ocen: "4, 3+, 5" |
