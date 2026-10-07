@@ -51,7 +51,12 @@ def _srednia_ocen(oceny: List[Dict]) -> Optional[float]:
         grade_str = g.get("ocena", "").strip()
         if not grade_str:
             continue
-            
+
+        # Ocena punktowa ze znana skala (np. 14 w skali 0-20) - liczymy procent
+        if g.get("punktowa") and g.get("procent") is not None:
+            wartosci.append(float(g["procent"]))
+            continue
+
         try:
             # 1. Sprawdz czy to czysta liczba wielocyfrowa lub z %/p/pkt (np. 95, 100, 95%, 85 pkt)
             if grade_str.isdigit() and len(grade_str) > 1:
@@ -217,7 +222,7 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                 subject = grade["subject"]
                 if subject not in oceny_wg_przedmiotu:
                     oceny_wg_przedmiotu[subject] = []
-                oceny_wg_przedmiotu[subject].append({
+                ocena = {
                     "ocena": grade["grade"],
                     "data": grade["date"],
                     "kategoria": grade["category"],
@@ -225,7 +230,12 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                     "semestr": grade.get("semester"),
                     "komentarz": grade.get("komentarz", ""),
                     "jest_nowa": _jest_nowa(grade["date"]),
-                })
+                }
+                if grade.get("type") == "points":
+                    ocena["punktowa"] = True
+                    ocena["max_punktow"] = grade.get("max_points")
+                    ocena["procent"] = grade.get("percent")
+                oceny_wg_przedmiotu[subject].append(ocena)
 
             wiadomosci = (
                 self._build_wiadomosci(messages)

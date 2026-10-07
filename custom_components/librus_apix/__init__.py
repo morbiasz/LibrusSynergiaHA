@@ -44,6 +44,70 @@ def _iso_date(d: str) -> str:
     return d
 
 
+def _parse_point_grades(html: str) -> list:
+    """Odczytaj oceny z sekcji "Oceny punktowe" strony ocen.
+
+    librus_apix.grades.get_grades pomija te wiersze (maja mniej kolumn niz
+    tabela zwyklych ocen). Wiersz przedmiotu rozpoznajemy po obrazku
+    z id "przedmioty_OP_<id>"; komorki (bez pierwszej): przedmiot,
+    oceny I okresu, wynik I, oceny II okresu, wynik II, wynik roczny.
+    Opis oceny jest w atrybucie title odnosnika, np.
+    "Kategoria: Aktywnosc (0-100)<br>Data: 2026-09-21 (pon.)<br>...".
+    """
+    import html as html_lib
+    import re
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "lxml")
+    result = []
+    for img in soup.select('img[id^="przedmioty_OP_"]'):
+        row = img.find_parent("tr")
+        if row is None or row.get("id"):
+            continue  # wiersz ze szczegolami (ukryty) ma id - pomijamy
+        cells = [td for td in row.find_all("td", recursive=False) if "screen-only" not in (td.get("class") or [])]
+        if len(cells) < 2:
+            continue
+        subject = cells[0].get_text(" ", strip=True)
+        for semester, idx in ((1, 1), (2, 3)):
+            if idx >= len(cells):
+                continue
+            for a in cells[idx].select("span.grade-box > a"):
+                title = html_lib.unescape(a.get("title", ""))
+                attrs = {}
+                for part in re.split(r"<br\s*/?>", title):
+                    if ": " in part:
+                        key, value = part.split(": ", 1)
+                        attrs[key.strip()] = value.strip()
+                category = attrs.get("Kategoria", "")
+                max_points = None
+                m = re.search(r"\(\s*(\d+)\s*-\s*(\d+)\s*\)\s*$", category)
+                if m:
+                    max_points = int(m.group(2))
+                    category = category[: m.start()].strip()
+                value = a.get_text(strip=True)
+                percent = None
+                try:
+                    if max_points:
+                        percent = round(float(value.replace(",", ".")) * 100 / max_points, 1)
+                except ValueError:
+                    pass
+                result.append({
+                    "subject": subject,
+                    "grade": value,
+                    "date": _iso_date(attrs.get("Data", "")[:10]),
+                    "category": category,
+                    "teacher": attrs.get("Nauczyciel", ""),
+                    "semester": semester,
+                    "komentarz": attrs.get("Komentarz", ""),
+                    "type": "points",
+                    "max_points": max_points,
+                    "percent": percent,
+                    "counts": attrs.get("Licz do wyniku", "").upper() == "TAK",
+                })
+    return result
+
+
 def _parse_completed_lessons(html: str) -> list:
     """Sparsuj tabele strony "Zrealizowane lekcje".
 
@@ -264,6 +328,20 @@ class LibrusApiClient:
                                     'komentarz': parsed_comment,
                                     'type': 'descriptive'
                                 })
+
+                # Oceny punktowe (sekcja "Oceny punktowe", np. 0-100) - librus-apix je pomija
+                try:
+                    html = await loop.run_in_executor(
+                        None,
+                        lambda: client.post(
+                            client.GRADES_URL, data={"zmiany_logowanie_wszystkie": "1"}
+                        ).text,
+                    )
+                    for g in _parse_point_grades(html):
+                        if g["semester"] == current_sem:
+                            all_grades.append(g)
+                except Exception as ex:  # best-effort: nie psuje zwyklych ocen
+                    _LOGGER.warning("Nie udalo sie odczytac ocen punktowych: %s", ex)
 
                 return all_grades
 
