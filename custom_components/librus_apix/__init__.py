@@ -44,6 +44,33 @@ def _iso_date(d: str) -> str:
     return d
 
 
+def _rodzaj_zdarzenia(tytul: str, href: str) -> str:
+    """Rozpoznaj rodzaj wpisu terminarza po tytule i adresie szczegolow.
+
+    - szczegoly_wolne/...: "Nauczyciel: ..." to nieobecnosc nauczyciela,
+      pozostale (np. "Swieto Niepodleglosci: SP") to dni wolne,
+    - bez odnosnika: zastepstwa ("Zastepstwo ...", "X na lekcji nr: 6 (...)"),
+      przesuniecia i odwolania,
+    - szczegoly/...: kategoria wpisana przez nauczyciela (sprawdzian,
+      kartkowka, ...), nieznane kategorie to "wydarzenie".
+    """
+    t = (tytul or "").strip().lower()
+    h = href or ""
+    if "szczegoly_wolne" in h:
+        return "nieobecnosc_nauczyciela" if t.startswith("nauczyciel") else "dzien_wolny"
+    if "przesunięcie" in t or "przesuniecie" in t:
+        return "przesuniecie"
+    if "odwołan" in t or "odwolan" in t:
+        return "odwolanie"
+    if "zastępstwo" in t or "zastepstwo" in t or " na lekcji nr" in t:
+        return "zastepstwo"
+    if any(x in t for x in ("sprawdzian", "klasówka", "klasowka", "praca klasowa", "test")):
+        return "sprawdzian"
+    if "kartkówka" in t or "kartkowka" in t:
+        return "kartkowka"
+    return "wydarzenie"
+
+
 def _parse_completed_lessons(html: str) -> list:
     """Sparsuj tabele strony "Zrealizowane lekcje".
 
@@ -434,6 +461,7 @@ class LibrusApiClient:
                                     "data": event_date.strftime("%Y-%m-%d"),
                                     "tydzien": dni[event_date.weekday()],
                                     "tytul": ev.title,
+                                    "rodzaj": _rodzaj_zdarzenia(ev.title, ev.href),
                                     "przedmiot": ev.subject,
                                     "godzina": ev.hour,
                                     "numer_lekcji": ev.number,

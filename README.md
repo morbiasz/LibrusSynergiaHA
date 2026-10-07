@@ -31,6 +31,7 @@ Integracja tworzy następujące sensory:
 | `sensor.librus_plan_lekcji` | Plan lekcji na pełne 7 dni z rozbiciem na dni tygodnia | - |
 | `sensor.librus_frekwencja` | Lista nieobecności i spóźnień, rozbicie na usprawiedliwione / nieusprawiedliwione / zwolnienia oraz **frekwencja w %** (semestr i rok) | liczba nieobecności |
 | `sensor.librus_tematy_lekcji` | **Tematy zrealizowanych lekcji** z ostatnich 7 dni wraz z wpisem frekwencji przy każdej lekcji (np. `nb` tylko na 1. lekcji) i zastępcą, jeśli lekcja była zastępstwem | liczba lekcji dzisiaj |
+| `sensor.librus_terminarz` | Nadchodzące wpisy terminarza (bieżący i następny miesiąc); każdy ma pole `rodzaj`: `sprawdzian`, `kartkowka`, `wydarzenie`, `zastepstwo`, `przesuniecie`, `odwolanie`, `nieobecnosc_nauczyciela`, `dzien_wolny` | liczba wpisów |
 | `sensor.librus_ogloszenia` | Najnowsze ogłoszenia | liczba ogłoszeń |
 | `calendar.*_calendar_timetable` | Wbudowany kalendarz lekcji ucznia | wydarzenia |
 | `calendar.*_calendar_schedule` | Wbudowany kalendarz sprawdzianów i wydarzeń | wydarzenia |
