@@ -19,6 +19,11 @@ from .const import DOMAIN, SCAN_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 
+def _id_nieobecnosci(lekcja: Dict) -> tuple:
+    """Identyfikator wpisu frekwencji przy lekcji (zmiana wpisu = nowy id)."""
+    return (lekcja.get("data"), lekcja.get("numer"), lekcja.get("przedmiot"), lekcja.get("obecnosc"))
+
+
 def _jest_nowa(date_str: str) -> bool:
     """Sprawdz czy data miesci sie w ostatnich 24 godzinach (dzis lub wczoraj)."""
     if not date_str:
@@ -156,6 +161,10 @@ EVENT_NOWA_WIADOMOSC = f"{DOMAIN}_nowa_wiadomosc"
 EVENT_NOWA_OCENA = f"{DOMAIN}_nowa_ocena"
 EVENT_NOWE_ZADANIE = f"{DOMAIN}_nowe_zadanie"
 EVENT_NOWE_ZDARZENIE = f"{DOMAIN}_nowe_zdarzenie"
+EVENT_NOWA_NIEOBECNOSC = f"{DOMAIN}_nowa_nieobecnosc"
+
+# Wpisy frekwencji oznaczajace obecnosc - nie wysylamy dla nich zdarzen
+_BEZ_ZDARZENIA = ("", "ob", "wy")
 
 
 class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
@@ -168,6 +177,7 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
         self._seen_grade_ids: set = set()
         self._seen_homework_ids: set = set()
         self._seen_schedule_ids: set = set()
+        self._seen_absence_ids: set = set()
         self._first_run: bool = True
         super().__init__(
             hass,
@@ -358,11 +368,14 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                     self._seen_schedule_ids.add(
                         (zdarzenie["data"], zdarzenie["tytul"], zdarzenie["przedmiot"])
                     )
+                for lekcja in tematy_lekcji:
+                    self._seen_absence_ids.add(_id_nieobecnosci(lekcja))
             else:
                 uczen = getattr(student_info, "name", "Nieznany uczeń") if student_info else "Nieznany uczeń"
                 self._fire_events(wiadomosci, grades, uczen)
                 self._fire_homework_events(zadania, uczen)
                 self._fire_schedule_events(terminarz, uczen)
+                self._fire_absence_events(tematy_lekcji, uczen)
 
             return result
 
@@ -405,6 +418,34 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                         "nauczyciel": grade["teacher"],
                     },
                 )
+
+    def _fire_absence_events(self, lekcje: List[Dict], uczen: str) -> None:
+        """Wyslij zdarzenia HA dla nowych wpisow frekwencji innych niz obecnosc.
+
+        Zrodlo: zrealizowane lekcje z ostatnich 7 dni (wpis przy kazdej lekcji).
+        Zmiana wpisu (np. nb -> u po usprawiedliwieniu) to nowe zdarzenie.
+        """
+        for lekcja in lekcje:
+            if (lekcja.get("obecnosc") or "") in _BEZ_ZDARZENIA:
+                continue
+            wpis = _id_nieobecnosci(lekcja)
+            if wpis in self._seen_absence_ids:
+                continue
+            self._seen_absence_ids.add(wpis)
+            _LOGGER.debug("Nowy wpis frekwencji %s: %s lekcja %s", lekcja["obecnosc"], lekcja["data"], lekcja["numer"])
+            self.hass.bus.fire(
+                EVENT_NOWA_NIEOBECNOSC,
+                {
+                    "uczen": uczen,
+                    "data": lekcja.get("data"),
+                    "dzien_tygodnia": lekcja.get("dzien_tygodnia"),
+                    "numer": lekcja.get("numer"),
+                    "przedmiot": lekcja.get("przedmiot"),
+                    "nauczyciel": lekcja.get("zastepca") or lekcja.get("nauczyciel"),
+                    "rodzaj": lekcja.get("obecnosc"),
+                    "opis": lekcja.get("obecnosc_opis"),
+                },
+            )
 
     def _fire_schedule_events(self, terminarz: List[Dict], uczen: str) -> None:
         """Wyslij zdarzenia HA dla nowych zdarzen w kalendarzu."""

@@ -422,7 +422,7 @@ severity:
 
 ## 🔔 Automatyzacje powiadomień na telefon
 
-Integracja wysyła zdarzenia Home Assistant gdy pojawi się nowa wiadomość lub ocena.
+Integracja wysyła zdarzenia Home Assistant gdy pojawi się nowa wiadomość, ocena lub wpis nieobecności/spóźnienia.
 Zdarzenia są wykrywane przy każdym odświeżeniu (co 2h). Pierwsze uruchomienie tylko zapamiętuje stan — **nie wysyła duplikatów**.
 
 > **Test bez czekania:** Idź do **Developer Tools → Events**, Event type: `librus_apix_nowa_wiadomosc`, Event data jak poniżej i kliknij **Fire Event**.
@@ -474,6 +474,28 @@ automation:
             Ocena: {{ trigger.event.data.ocena }}
             Kategoria: {{ trigger.event.data.kategoria }}
             Nauczyciel: {{ trigger.event.data.nauczyciel }}
+```
+
+### 🚸 Powiadomienie o nieobecności lub spóźnieniu
+
+Zdarzenie: `librus_apix_nowa_nieobecnosc`  
+Dostępne dane: `uczen`, `data`, `dzien_tygodnia`, `numer` (lekcji), `przedmiot`, `nauczyciel`, `rodzaj` (np. `nb`, `sp`, `u`, `zw`), `opis` (np. "nieobecność")
+
+Źródło: wpis frekwencji przy każdej zrealizowanej lekcji z ostatnich 7 dni (`sensor.librus_tematy_lekcji`). Obecność (`ob`) i wycieczka (`wy`) nie wysyłają zdarzeń. Zmiana wpisu, np. `nb` → `u` po usprawiedliwieniu, to nowe zdarzenie.
+
+```yaml
+automation:
+  - alias: "Librus - nieobecność lub spóźnienie"
+    trigger:
+      platform: event
+      event_type: librus_apix_nowa_nieobecnosc
+    action:
+      - service: notify.mobile_app_NAZWA_TWOJEGO_TELEFONU
+        data:
+          title: "🚸 {{ trigger.event.data.uczen }}: {{ trigger.event.data.opis or trigger.event.data.rodzaj }}"
+          message: >-
+            {{ trigger.event.data.dzien_tygodnia }} {{ trigger.event.data.data }},
+            lekcja {{ trigger.event.data.numer }}: {{ trigger.event.data.przedmiot }}
 ```
 
 > **Gdzie znaleźć nazwę telefonu?** HA → Settings → Devices & Services → Mobile App → nazwa urządzenia (np. `notify.mobile_app_samsung_galaxy_s24`)
