@@ -300,8 +300,11 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                                             opis_str = opis_str[:97] + "..."
                                         lekcja["zdarzenie_opis"] = opis_str
                         else:
-                            # Jesli nie dopasowano lekcji z planu, a terminarz ma numer lekcji (np. poprawa po lekcjach)
-                            if ev_num:
+                            # Jesli nie dopasowano lekcji z planu, a terminarz ma numer lekcji (np. poprawa po lekcjach).
+                            # Nieobecnosc nauczyciela i dzien wolny nie sa zajeciami ucznia - nie dodajemy
+                            # dla nich sztucznej lekcji (np. nieobecnosc nauczyciela na 8. lekcji, ktorej
+                            # uczen nie ma, dawala lekcje "??:??" i psula plan dnia).
+                            if ev_num and t_ev.get("rodzaj") not in ("nieobecnosc_nauczyciela", "dzien_wolny"):
                                 try:
                                     first_num = int(str(ev_num).split("-")[0])
                                     ev_opis = t_ev.get("szczegoly", {}).get("Opis")
@@ -312,6 +315,8 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                                     day.setdefault("lekcje", []).append({
                                         "przedmiot": ev_subject or ev_title,
                                         "nauczyciel_i_sala": "",
+                                        "nauczyciel": "",
+                                        "sala": "",
                                         "godzina_od": "??:??",
                                         "godzina_do": "??:??",
                                         "data": ev_date,

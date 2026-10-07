@@ -702,14 +702,12 @@ class LibrusApiClient:
                                 "numer": period.number,
                                 "zdarzenie": None,
                             }
-                            if odwolana:
-                                lekcja_dict["odwolana"] = True
-                            if zastepstwo:
-                                lekcja_dict["zastepstwo"] = True
-                            if nauczyciel:
-                                lekcja_dict["nauczyciel"] = nauczyciel
-                            if sala:
-                                lekcja_dict["sala"] = sala
+                            # Zawsze te same klucze - szablony kart (tryb scisly) nie moga
+                            # trafiac na brakujace pole, np. l.sala
+                            lekcja_dict["odwolana"] = bool(odwolana)
+                            lekcja_dict["zastepstwo"] = bool(zastepstwo)
+                            lekcja_dict["nauczyciel"] = nauczyciel or ""
+                            lekcja_dict["sala"] = sala or ""
                             day_list.append(lekcja_dict)
                             if period.date_from and period.number is not None:
                                 hour_to_num.setdefault(period.date_from, period.number)
@@ -744,6 +742,8 @@ class LibrusApiClient:
                             lekcje.append({
                                 "przedmiot": title,
                                 "nauczyciel_i_sala": nis,
+                                "nauczyciel": teacher,
+                                "sala": sala,
                                 "godzina_od": start,
                                 "godzina_do": end,
                                 "data": ev.get("date"),
@@ -778,6 +778,8 @@ class LibrusApiClient:
                             lekcje.append({
                                 "przedmiot": f"{title} [ZŚK]",
                                 "nauczyciel_i_sala": nis,
+                                "nauczyciel": teacher,
+                                "sala": sala,
                                 "godzina_od": start,
                                 "godzina_do": end,
                                 "data": ev.get("date"),
