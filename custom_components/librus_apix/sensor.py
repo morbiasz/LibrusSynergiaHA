@@ -19,6 +19,11 @@ from .const import DOMAIN, SCAN_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 
+def _id_nieobecnosci(lekcja: Dict) -> tuple:
+    """Identyfikator wpisu frekwencji przy lekcji (zmiana wpisu = nowy id)."""
+    return (lekcja.get("data"), lekcja.get("numer"), lekcja.get("przedmiot"), lekcja.get("obecnosc"))
+
+
 def _jest_nowa(date_str: str) -> bool:
     """Sprawdz czy data miesci sie w ostatnich 24 godzinach (dzis lub wczoraj)."""
     if not date_str:
@@ -51,7 +56,12 @@ def _srednia_ocen(oceny: List[Dict]) -> Optional[float]:
         grade_str = g.get("ocena", "").strip()
         if not grade_str:
             continue
-            
+
+        # Ocena punktowa ze znana skala (np. 14 w skali 0-20) - liczymy procent
+        if g.get("punktowa") and g.get("procent") is not None:
+            wartosci.append(float(g["procent"]))
+            continue
+
         try:
             # 1. Sprawdz czy to czysta liczba wielocyfrowa lub z %/p/pkt (np. 95, 100, 95%, 85 pkt)
             if grade_str.isdigit() and len(grade_str) > 1:
@@ -139,6 +149,7 @@ async def async_setup_entry(
         LibrusFrekwencjaSensor(coordinator, config_entry),
         LibrusOgloszeniaSensor(coordinator, config_entry),
         LibrusTematyLekcjiSensor(coordinator, config_entry),
+        LibrusUwagiSensor(coordinator, config_entry),
     ]
 
     # Tworz czujniki per przedmiot na podstawie pierwszego pobrania danych
@@ -156,6 +167,11 @@ EVENT_NOWA_WIADOMOSC = f"{DOMAIN}_nowa_wiadomosc"
 EVENT_NOWA_OCENA = f"{DOMAIN}_nowa_ocena"
 EVENT_NOWE_ZADANIE = f"{DOMAIN}_nowe_zadanie"
 EVENT_NOWE_ZDARZENIE = f"{DOMAIN}_nowe_zdarzenie"
+EVENT_NOWA_NIEOBECNOSC = f"{DOMAIN}_nowa_nieobecnosc"
+
+# Wpisy frekwencji oznaczajace obecnosc - nie wysylamy dla nich zdarzen
+_BEZ_ZDARZENIA = ("", "ob", "wy")
+EVENT_NOWA_UWAGA = f"{DOMAIN}_nowa_uwaga"
 
 
 class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
@@ -168,6 +184,8 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
         self._seen_grade_ids: set = set()
         self._seen_homework_ids: set = set()
         self._seen_schedule_ids: set = set()
+        self._seen_absence_ids: set = set()
+        self._seen_note_ids: set = set()
         self._first_run: bool = True
         super().__init__(
             hass,
@@ -193,6 +211,7 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
             ogloszenia_raw = await self.client.async_get_announcements()
             tematy_raw = await self.client.async_get_completed_lessons()
             frekwencja_stat_raw = await self.client.async_get_attendance_stats()
+            uwagi_raw = await self.client.async_get_notes()
 
             prev = self.data or {}
 
@@ -217,7 +236,7 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                 subject = grade["subject"]
                 if subject not in oceny_wg_przedmiotu:
                     oceny_wg_przedmiotu[subject] = []
-                oceny_wg_przedmiotu[subject].append({
+                ocena = {
                     "ocena": grade["grade"],
                     "data": grade["date"],
                     "kategoria": grade["category"],
@@ -226,7 +245,12 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                     "komentarz": grade.get("komentarz", ""),
                     "opis": grade.get("opis", ""),
                     "jest_nowa": _jest_nowa(grade["date"]),
-                })
+                }
+                if grade.get("type") == "points":
+                    ocena["punktowa"] = True
+                    ocena["max_punktow"] = grade.get("max_points")
+                    ocena["procent"] = grade.get("percent")
+                oceny_wg_przedmiotu[subject].append(ocena)
 
             wiadomosci = (
                 self._build_wiadomosci(messages)
@@ -243,6 +267,7 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
             frekwencja = frekwencja_raw if frekwencja_raw is not None else prev.get("frekwencja", [])
             ogloszenia = ogloszenia_raw if ogloszenia_raw is not None else prev.get("ogloszenia", [])
             tematy_lekcji = tematy_raw if tematy_raw is not None else prev.get("tematy_lekcji", [])
+            uwagi = uwagi_raw if uwagi_raw is not None else prev.get("uwagi", [])
             frekwencja_stat = (
                 _frekwencja_statystyki(frekwencja_stat_raw, current_sem)
                 if frekwencja_stat_raw is not None
@@ -338,6 +363,7 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                 "frekwencja": frekwencja,
                 "ogloszenia": ogloszenia,
                 "tematy_lekcji": tematy_lekcji,
+                "uwagi": uwagi,
                 "frekwencja_stat": frekwencja_stat,
                 "semestr_biezacy": current_sem,
             }
@@ -359,11 +385,17 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                     self._seen_schedule_ids.add(
                         (zdarzenie["data"], zdarzenie["tytul"], zdarzenie["przedmiot"])
                     )
+                for lekcja in tematy_lekcji:
+                    self._seen_absence_ids.add(_id_nieobecnosci(lekcja))
+                for uwaga in uwagi:
+                    self._seen_note_ids.add(uwaga["id"])
             else:
                 uczen = getattr(student_info, "name", "Nieznany uczeń") if student_info else "Nieznany uczeń"
                 self._fire_events(wiadomosci, grades, uczen)
                 self._fire_homework_events(zadania, uczen)
                 self._fire_schedule_events(terminarz, uczen)
+                self._fire_absence_events(tematy_lekcji, uczen)
+                self._fire_note_events(uwagi, uczen)
 
             return result
 
@@ -407,6 +439,50 @@ class LibrusDataUpdateCoordinator(DataUpdateCoordinator):
                         "opis": grade.get("opis", ""),
                     },
                 )
+
+    def _fire_absence_events(self, lekcje: List[Dict], uczen: str) -> None:
+        """Wyslij zdarzenia HA dla nowych wpisow frekwencji innych niz obecnosc.
+
+        Zrodlo: zrealizowane lekcje z ostatnich 7 dni (wpis przy kazdej lekcji).
+        Zmiana wpisu (np. nb -> u po usprawiedliwieniu) to nowe zdarzenie.
+        """
+        for lekcja in lekcje:
+            if (lekcja.get("obecnosc") or "") in _BEZ_ZDARZENIA:
+                continue
+            wpis = _id_nieobecnosci(lekcja)
+            if wpis in self._seen_absence_ids:
+                continue
+            self._seen_absence_ids.add(wpis)
+            _LOGGER.debug("Nowy wpis frekwencji %s: %s lekcja %s", lekcja["obecnosc"], lekcja["data"], lekcja["numer"])
+            self.hass.bus.fire(
+                EVENT_NOWA_NIEOBECNOSC,
+                {
+                    "uczen": uczen,
+                    "data": lekcja.get("data"),
+                    "dzien_tygodnia": lekcja.get("dzien_tygodnia"),
+                    "numer": lekcja.get("numer"),
+                    "przedmiot": lekcja.get("przedmiot"),
+                    "nauczyciel": lekcja.get("zastepca") or lekcja.get("nauczyciel"),
+                    "rodzaj": lekcja.get("obecnosc"),
+                    "opis": lekcja.get("obecnosc_opis"),
+    def _fire_note_events(self, uwagi: List[Dict], uczen: str) -> None:
+        """Wyslij zdarzenia HA dla nowych uwag."""
+        for uwaga in uwagi:
+            if uwaga["id"] in self._seen_note_ids:
+                continue
+            self._seen_note_ids.add(uwaga["id"])
+            _LOGGER.debug("Nowa uwaga (%s) z %s", uwaga["rodzaj"], uwaga["data"])
+            self.hass.bus.fire(
+                EVENT_NOWA_UWAGA,
+                {
+                    "uczen": uczen,
+                    "data": uwaga["data"],
+                    "rodzaj": uwaga["rodzaj"],
+                    "kategoria": uwaga["kategoria"],
+                    "nauczyciel": uwaga["nauczyciel"],
+                    "tresc": uwaga["tresc"],
+                },
+            )
 
     def _fire_schedule_events(self, terminarz: List[Dict], uczen: str) -> None:
         """Wyslij zdarzenia HA dla nowych zdarzen w kalendarzu."""
@@ -814,7 +890,8 @@ class LibrusWiadomosciSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        msgs = (self.coordinator.data or {}).get("wiadomosci", [])[:5]
+        # Tyle wiadomości, ile pobrano (opcja fetch_messages_count)
+        msgs = (self.coordinator.data or {}).get("wiadomosci", [])
         
         # Przygotuj liste wiadomosci
         wiadomosci_list = [
@@ -994,6 +1071,40 @@ class LibrusTematyLekcjiSensor(CoordinatorEntity, SensorEntity):
             "ostatni_dzien": ostatni_dzien,
             "lekcje_ostatniego_dnia": [l for l in lekcje if l.get("data") == ostatni_dzien],
             "nieobecnosci": [l for l in lekcje if l.get("obecnosc") in ("nb", "u")],
+        }
+
+
+class LibrusUwagiSensor(CoordinatorEntity, SensorEntity):
+    """Czujnik z uwagami (pozytywne, negatywne, neutralne)."""
+
+    def __init__(self, coordinator: LibrusDataUpdateCoordinator, config_entry: ConfigEntry) -> None:
+        """Inicjalizacja."""
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_has_entity_name = False
+        self._attr_name = "Uwagi"
+        self._attr_unique_id = f"{config_entry.entry_id}_uwagi"
+        self._attr_icon = "mdi:account-alert"
+
+    @property
+    def device_info(self) -> Dict[str, Any]:
+        return _device_info(self.coordinator, self._config_entry)
+
+    @property
+    def native_value(self) -> int:
+        """Liczba uwag."""
+        return len((self.coordinator.data or {}).get("uwagi", []))
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        uwagi = (self.coordinator.data or {}).get("uwagi", [])
+        return {
+            "uwagi": uwagi,
+            "liczba_pozytywnych": sum(1 for u in uwagi if u["rodzaj"] == "pozytywna"),
+            "liczba_negatywnych": sum(1 for u in uwagi if u["rodzaj"] == "negatywna"),
+            "liczba_neutralnych": sum(1 for u in uwagi if u["rodzaj"] == "neutralna"),
+            "ostatnia": uwagi[0] if uwagi else None,
+            "sa_nowe_uwagi": any(_jest_nowa(u["data"]) for u in uwagi),
         }
 
 
