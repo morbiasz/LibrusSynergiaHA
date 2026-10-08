@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import traceback
 from datetime import date
 from typing import Dict, Any
@@ -69,6 +70,93 @@ def _rodzaj_zdarzenia(tytul: str, href: str) -> str:
     if "kartkówka" in t or "kartkowka" in t:
         return "kartkowka"
     return "wydarzenie"
+# Linia "Klucz: wartosc" w opisie oceny (Kategoria:, Data:, Nauczyciel: ...)
+_KLUCZ_OPISU = re.compile(r"^[A-ZĄĆĘŁŃÓŚŹŻ][\w .()/-]{0,40}: ")
+
+
+def _opis_oceny(desc: str) -> str:
+    r"""Wyciagnij slowny opis oceny z pola desc biblioteki librus-apix.
+
+    librus-apix sklada desc jako "Ocena: <symbol>\nPrzedmiot: <przedmiot>\n"
+    + tresc atrybutu title. Przy ocenach tekstowych/symbolicznych (np. "T",
+    "np") w title jest dodatkowa linia "Ocena: <opis>", czasem wielowierszowa,
+    np. "Ocena: Diagnoza\n\n12/20p\n\n60%". Zwraca opis (linie laczone " · ")
+    albo "" gdy go nie ma.
+    """
+    lines = (desc or "").split("\n")[2:]  # pomijamy linie dodane przez biblioteke
+    opis = []
+    for i, line in enumerate(lines):
+        if line.startswith("Ocena: "):
+            opis.append(line[len("Ocena: "):].strip())
+            for nxt in lines[i + 1:]:
+                if _KLUCZ_OPISU.match(nxt):
+                    break
+                if nxt.strip():
+                    opis.append(nxt.strip())
+            break
+    return " · ".join(x for x in opis if x)
+def _parse_point_grades(html: str) -> list:
+    """Odczytaj oceny z sekcji "Oceny punktowe" strony ocen.
+
+    librus_apix.grades.get_grades pomija te wiersze (maja mniej kolumn niz
+    tabela zwyklych ocen). Wiersz przedmiotu rozpoznajemy po obrazku
+    z id "przedmioty_OP_<id>"; komorki (bez pierwszej): przedmiot,
+    oceny I okresu, wynik I, oceny II okresu, wynik II, wynik roczny.
+    Opis oceny jest w atrybucie title odnosnika, np.
+    "Kategoria: Aktywnosc (0-100)<br>Data: 2026-09-21 (pon.)<br>...".
+    """
+    import html as html_lib
+    import re
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "lxml")
+    result = []
+    for img in soup.select('img[id^="przedmioty_OP_"]'):
+        row = img.find_parent("tr")
+        if row is None or row.get("id"):
+            continue  # wiersz ze szczegolami (ukryty) ma id - pomijamy
+        cells = [td for td in row.find_all("td", recursive=False) if "screen-only" not in (td.get("class") or [])]
+        if len(cells) < 2:
+            continue
+        subject = cells[0].get_text(" ", strip=True)
+        for semester, idx in ((1, 1), (2, 3)):
+            if idx >= len(cells):
+                continue
+            for a in cells[idx].select("span.grade-box > a"):
+                title = html_lib.unescape(a.get("title", ""))
+                attrs = {}
+                for part in re.split(r"<br\s*/?>", title):
+                    if ": " in part:
+                        key, value = part.split(": ", 1)
+                        attrs[key.strip()] = value.strip()
+                category = attrs.get("Kategoria", "")
+                max_points = None
+                m = re.search(r"\(\s*(\d+)\s*-\s*(\d+)\s*\)\s*$", category)
+                if m:
+                    max_points = int(m.group(2))
+                    category = category[: m.start()].strip()
+                value = a.get_text(strip=True)
+                percent = None
+                try:
+                    if max_points:
+                        percent = round(float(value.replace(",", ".")) * 100 / max_points, 1)
+                except ValueError:
+                    pass
+                result.append({
+                    "subject": subject,
+                    "grade": value,
+                    "date": _iso_date(attrs.get("Data", "")[:10]),
+                    "category": category,
+                    "teacher": attrs.get("Nauczyciel", ""),
+                    "semester": semester,
+                    "komentarz": attrs.get("Komentarz", ""),
+                    "type": "points",
+                    "max_points": max_points,
+                    "percent": percent,
+                    "counts": attrs.get("Licz do wyniku", "").upper() == "TAK",
+                })
+    return result
 
 
 def _parse_completed_lessons(html: str) -> list:
@@ -234,6 +322,7 @@ class LibrusApiClient:
                                 'teacher': getattr(grade, 'teacher', ''),
                                 'semester': grade.semester,
                                 'komentarz': komentarz_str,
+                                'opis': _opis_oceny(getattr(grade, 'desc', '')),
                                 'type': 'numeric'
                             })
 
@@ -289,8 +378,23 @@ class LibrusApiClient:
                                     'teacher': parsed_teacher,
                                     'semester': desc_grade.semester,
                                     'komentarz': parsed_comment,
+                                    'opis': _opis_oceny(desc_text),
                                     'type': 'descriptive'
                                 })
+
+                # Oceny punktowe (sekcja "Oceny punktowe", np. 0-100) - librus-apix je pomija
+                try:
+                    html = await loop.run_in_executor(
+                        None,
+                        lambda: client.post(
+                            client.GRADES_URL, data={"zmiany_logowanie_wszystkie": "1"}
+                        ).text,
+                    )
+                    for g in _parse_point_grades(html):
+                        if g["semester"] == current_sem:
+                            all_grades.append(g)
+                except Exception as ex:  # best-effort: nie psuje zwyklych ocen
+                    _LOGGER.warning("Nie udalo sie odczytac ocen punktowych: %s", ex)
 
                 return all_grades
 
@@ -325,12 +429,17 @@ class LibrusApiClient:
 
                 loop = asyncio.get_running_loop()
                 messages = []
+                seen = set()
                 page = 0
-                while len(messages) < count:
+                # Librus dla numeru strony poza zakresem zwraca ponownie ostatnią stronę,
+                # więc kończymy, gdy strona nie wnosi nic nowego (bezpiecznik: 10 stron).
+                while len(messages) < count and page < 10:
                     page_msgs = await loop.run_in_executor(None, get_received, client, page)
-                    if not page_msgs:
+                    new_msgs = [m for m in page_msgs or [] if m.href not in seen]
+                    if not new_msgs:
                         break
-                    messages.extend(page_msgs)
+                    seen.update(m.href for m in new_msgs)
+                    messages.extend(new_msgs)
                     page += 1
                 messages = messages[:count] if messages else []
                 
@@ -1047,6 +1156,70 @@ class LibrusApiClient:
         except Exception as ex:
             _LOGGER.warning("Frekwencja: nie udało się pobrać statystyk: %s", ex)
             return None
+
+    async def async_get_notes(self):
+        """Pobierz uwagi z gateway API (Notes, Notes/Categories, Users).
+
+        Best-effort: przy bledzie zwraca None (czujnik zostawi poprzednie dane).
+        Zwraca liste uwag od najnowszej.
+        """
+        try:
+            if not self._client or not self._token:
+                if not await self.async_authenticate():
+                    return None
+            client = self._client
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _fetch_notes, client)
+        except Exception as ex:
+            _LOGGER.warning("Uwagi: nie udało się pobrać: %s", ex)
+            return None
+
+
+_RODZAJ_UWAGI = {0: "negatywna", 1: "pozytywna", 2: "neutralna"}
+
+
+def _fetch_notes(client) -> list | None:
+    """Pobierz i zmapuj uwagi (wywolywane w executorze)."""
+    oauth = client.refresh_oauth()
+    if oauth:
+        client.cookies["oauth_token"] = oauth
+    api = client.BASE_URL + "/gateway/api/2.0/"
+    payload = client.get(api + "Notes").json() or {}
+    notes = payload.get("Notes")
+    if notes is None:
+        _LOGGER.warning("Uwagi: brak pola 'Notes': %s", str(payload)[:200])
+        return None
+    if not notes:
+        return []
+    try:
+        kategorie = {
+            c["Id"]: c.get("CategoryName", "")
+            for c in client.get(api + "Notes/Categories").json().get("Categories", [])
+        }
+    except Exception:  # bez kategorii tez sie da
+        kategorie = {}
+    try:
+        users = client.get(api + "Users").json().get("Users", [])
+        osoby = {u["Id"]: f"{u.get('LastName', '')} {u.get('FirstName', '')}".strip() for u in users}
+    except Exception:
+        osoby = {}
+    return _map_notes(notes, kategorie, osoby)
+
+
+def _map_notes(notes: list, kategorie: dict, osoby: dict) -> list:
+    """Zamien surowe uwagi z API na liste slownikow (od najnowszej)."""
+    result = []
+    for n in notes:
+        positive = n.get("Positive")
+        result.append({
+            "id": n.get("Id"),
+            "data": (n.get("Date") or "")[:10],
+            "tresc": (n.get("Text") or "").strip(),
+            "rodzaj": _RODZAJ_UWAGI.get(positive, "inna"),
+            "kategoria": kategorie.get((n.get("Category") or {}).get("Id"), ""),
+            "nauczyciel": osoby.get((n.get("Teacher") or {}).get("Id"), ""),
+        })
+    return sorted(result, key=lambda u: (u["data"], u["id"] or 0), reverse=True)
 
 
 async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
