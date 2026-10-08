@@ -31,6 +31,7 @@ Integracja tworzy następujące sensory:
 | `sensor.librus_plan_lekcji` | Plan lekcji na pełne 7 dni z rozbiciem na dni tygodnia | - |
 | `sensor.librus_frekwencja` | Lista nieobecności i spóźnień, rozbicie na usprawiedliwione / nieusprawiedliwione / zwolnienia oraz **frekwencja w %** (semestr i rok) | liczba nieobecności |
 | `sensor.librus_tematy_lekcji` | **Tematy zrealizowanych lekcji** z ostatnich 7 dni wraz z wpisem frekwencji przy każdej lekcji (np. `nb` tylko na 1. lekcji) i zastępcą, jeśli lekcja była zastępstwem | liczba lekcji dzisiaj |
+| `sensor.librus_uwagi` | **Uwagi** (pozytywne, negatywne, neutralne) z treścią, kategorią, datą i nauczycielem | liczba uwag |
 | `sensor.librus_ogloszenia` | Najnowsze ogłoszenia | liczba ogłoszeń |
 | `calendar.*_calendar_timetable` | Wbudowany kalendarz lekcji ucznia | wydarzenia |
 | `calendar.*_calendar_schedule` | Wbudowany kalendarz sprawdzianów i wydarzeń | wydarzenia |
@@ -422,7 +423,7 @@ severity:
 
 ## 🔔 Automatyzacje powiadomień na telefon
 
-Integracja wysyła zdarzenia Home Assistant gdy pojawi się nowa wiadomość lub ocena.
+Integracja wysyła zdarzenia Home Assistant gdy pojawi się nowa wiadomość, ocena lub uwaga.
 Zdarzenia są wykrywane przy każdym odświeżeniu (co 2h). Pierwsze uruchomienie tylko zapamiętuje stan — **nie wysyła duplikatów**.
 
 > **Test bez czekania:** Idź do **Developer Tools → Events**, Event type: `librus_apix_nowa_wiadomosc`, Event data jak poniżej i kliknij **Fire Event**.
@@ -474,6 +475,26 @@ automation:
             Ocena: {{ trigger.event.data.ocena }}
             Kategoria: {{ trigger.event.data.kategoria }}
             Nauczyciel: {{ trigger.event.data.nauczyciel }}
+```
+
+### ⚠️ Powiadomienie o nowej uwadze
+
+Zdarzenie: `librus_apix_nowa_uwaga`  
+Dostępne dane: `uczen`, `data`, `rodzaj` (`pozytywna` / `negatywna` / `neutralna`), `kategoria`, `nauczyciel`, `tresc`
+
+```yaml
+automation:
+  - alias: "Librus - nowa uwaga"
+    trigger:
+      platform: event
+      event_type: librus_apix_nowa_uwaga
+    action:
+      - service: notify.mobile_app_NAZWA_TWOJEGO_TELEFONU
+        data:
+          title: >-
+            {{ {'pozytywna': '👍', 'negatywna': '⚠️'}.get(trigger.event.data.rodzaj, 'ℹ️') }}
+            {{ trigger.event.data.uczen }} - uwaga {{ trigger.event.data.rodzaj }}
+          message: "{{ trigger.event.data.tresc }} ({{ trigger.event.data.nauczyciel }})"
 ```
 
 > **Gdzie znaleźć nazwę telefonu?** HA → Settings → Devices & Services → Mobile App → nazwa urządzenia (np. `notify.mobile_app_samsung_galaxy_s24`)

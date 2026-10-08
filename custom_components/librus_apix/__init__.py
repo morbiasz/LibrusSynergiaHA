@@ -1101,6 +1101,70 @@ class LibrusApiClient:
             _LOGGER.warning("Frekwencja: nie udało się pobrać statystyk: %s", ex)
             return None
 
+    async def async_get_notes(self):
+        """Pobierz uwagi z gateway API (Notes, Notes/Categories, Users).
+
+        Best-effort: przy bledzie zwraca None (czujnik zostawi poprzednie dane).
+        Zwraca liste uwag od najnowszej.
+        """
+        try:
+            if not self._client or not self._token:
+                if not await self.async_authenticate():
+                    return None
+            client = self._client
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _fetch_notes, client)
+        except Exception as ex:
+            _LOGGER.warning("Uwagi: nie udało się pobrać: %s", ex)
+            return None
+
+
+_RODZAJ_UWAGI = {0: "negatywna", 1: "pozytywna", 2: "neutralna"}
+
+
+def _fetch_notes(client) -> list | None:
+    """Pobierz i zmapuj uwagi (wywolywane w executorze)."""
+    oauth = client.refresh_oauth()
+    if oauth:
+        client.cookies["oauth_token"] = oauth
+    api = client.BASE_URL + "/gateway/api/2.0/"
+    payload = client.get(api + "Notes").json() or {}
+    notes = payload.get("Notes")
+    if notes is None:
+        _LOGGER.warning("Uwagi: brak pola 'Notes': %s", str(payload)[:200])
+        return None
+    if not notes:
+        return []
+    try:
+        kategorie = {
+            c["Id"]: c.get("CategoryName", "")
+            for c in client.get(api + "Notes/Categories").json().get("Categories", [])
+        }
+    except Exception:  # bez kategorii tez sie da
+        kategorie = {}
+    try:
+        users = client.get(api + "Users").json().get("Users", [])
+        osoby = {u["Id"]: f"{u.get('LastName', '')} {u.get('FirstName', '')}".strip() for u in users}
+    except Exception:
+        osoby = {}
+    return _map_notes(notes, kategorie, osoby)
+
+
+def _map_notes(notes: list, kategorie: dict, osoby: dict) -> list:
+    """Zamien surowe uwagi z API na liste slownikow (od najnowszej)."""
+    result = []
+    for n in notes:
+        positive = n.get("Positive")
+        result.append({
+            "id": n.get("Id"),
+            "data": (n.get("Date") or "")[:10],
+            "tresc": (n.get("Text") or "").strip(),
+            "rodzaj": _RODZAJ_UWAGI.get(positive, "inna"),
+            "kategoria": kategorie.get((n.get("Category") or {}).get("Id"), ""),
+            "nauczyciel": osoby.get((n.get("Teacher") or {}).get("Id"), ""),
+        })
+    return sorted(result, key=lambda u: (u["data"], u["id"] or 0), reverse=True)
+
 
 async def async_setup(hass: HomeAssistant, config: Dict[str, Any]) -> bool:
     """Set up the Librus APIX component."""
