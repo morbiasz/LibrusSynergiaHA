@@ -574,6 +574,14 @@ MIT License - patrz [LICENSE](LICENSE)
 
 ## 📝 Historia Zmian
 
+### v2.3.0
+Ogromne podziękowania dla społeczności (w szczególności dla **@morbiasz**) za pomoc w rozwoju integracji! Ta wersja wprowadza długo wyczekiwane poprawki oraz nowe funkcje:
+- **Nowość: Oceny Punktowe (0-100)** - Integracja radzi sobie wreszcie z poprawnym odczytywaniem i wyświetlaniem ocen wyrażonych w punktach/procentach (Rozwiązuje Issue #22).
+- **Nowość: Sensor Uwag** - Dodano nowy sensor zbierający uwagi ucznia (POZ, NEG, NEU).
+- **Nowość: Gotowy Dashboard** - W folderze `examples` udostępniono gotowe rozwiązanie panelu "Szkoła" do skopiowania na pulpit HA.
+- **Naprawa Wiadomości:** Zlikwidowano sztywny limit 5 wiadomości. Od teraz sensor poprawnie wczytuje ilość zadeklarowaną przez użytkownika w konfiguracji (nawet do 25 wiadomości) oraz rozwiązano problem duplikujących się elementów na małych skrzynkach (Rozwiązuje Issue #28).
+- **Inne:** Poprawki w architekturze testów środowiskowych.
+
 ### v2.2.1
 - **Inteligentna fuzja planu lekcji z terminarzem** - Nowy "Algorytm Wagowy" automatycznie dopasowuje sprawdziany (Terminarz) do odpowiednich przedmiotów w planie lekcji, zapobiegając błędnemu przypisywaniu (np. jeden sprawdzian na trzech przedmiotach tego samego dnia).
 - **Zabezpieczenie przed błędem SQLite 16KB w Home Assistant** - Optymalizacja objętości danych JSON (np. inteligentne ucinanie opisu po 100 znakach), chroniąca bazę Recordera przed przepełnieniem.
