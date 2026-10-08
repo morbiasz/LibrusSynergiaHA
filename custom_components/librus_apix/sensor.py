@@ -812,7 +812,8 @@ class LibrusWiadomosciSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        msgs = (self.coordinator.data or {}).get("wiadomosci", [])[:5]
+        # Tyle wiadomości, ile pobrano (opcja fetch_messages_count)
+        msgs = (self.coordinator.data or {}).get("wiadomosci", [])
         
         # Przygotuj liste wiadomosci
         wiadomosci_list = [

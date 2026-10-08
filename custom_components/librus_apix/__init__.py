@@ -298,12 +298,17 @@ class LibrusApiClient:
 
                 loop = asyncio.get_running_loop()
                 messages = []
+                seen = set()
                 page = 0
-                while len(messages) < count:
+                # Librus dla numeru strony poza zakresem zwraca ponownie ostatnią stronę,
+                # więc kończymy, gdy strona nie wnosi nic nowego (bezpiecznik: 10 stron).
+                while len(messages) < count and page < 10:
                     page_msgs = await loop.run_in_executor(None, get_received, client, page)
-                    if not page_msgs:
+                    new_msgs = [m for m in page_msgs or [] if m.href not in seen]
+                    if not new_msgs:
                         break
-                    messages.extend(page_msgs)
+                    seen.update(m.href for m in new_msgs)
+                    messages.extend(new_msgs)
                     page += 1
                 messages = messages[:count] if messages else []
                 
