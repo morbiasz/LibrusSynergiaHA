@@ -94,6 +94,10 @@ recorder:
       - sensor.librus_*_tematy_lekcji
       - sensor.librus_*_frekwencja
 ```
+## 🧩 Gotowy panel
+
+Nie chcesz składać kart samodzielnie? W katalogu [`examples/dashboard`](examples/dashboard) jest gotowy panel „Szkoła” (strona główna + podwidok każdego ucznia) do wklejenia w edytorze kodu źródłowego panelu, oraz generator dla dowolnej liczby uczniów.
+
 ## 📊 Przykładowe karty Lovelace
 
 ### Karta ocen i średnich
