@@ -20,6 +20,28 @@ _LOGGER = logging.getLogger(__name__)
 _STREFA_PL = zoneinfo.ZoneInfo("Europe/Warsaw")
 
 
+def _biezace_lub_nastepne(events: List[CalendarEvent], now: datetime) -> CalendarEvent | None:
+    """Trwajace wydarzenie albo, gdy zadne nie trwa, najblizsze nadchodzace.
+
+    Wydarzenie trwa do swojego konca, wiec liczy sie czas zakonczenia, a nie
+    rozpoczecia - inaczej encja nigdy nie bylaby w stanie "on".
+    """
+    aktualne = [e for e in events if e.end_datetime_local > now]
+    if not aktualne:
+        return None
+    return min(aktualne, key=lambda e: e.start_datetime_local)
+
+
+def _w_zakresie(
+    events: List[CalendarEvent], start_date: datetime, end_date: datetime
+) -> List[CalendarEvent]:
+    """Wydarzenia, ktore zachodza na zadany zakres (rowniez rozpoczete wczesniej)."""
+    return [
+        e for e in events
+        if e.start_datetime_local < end_date and e.end_datetime_local > start_date
+    ]
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -54,16 +76,12 @@ class LibrusTimetableCalendar(CoordinatorEntity, CalendarEntity):
 
     @property
     def event(self) -> CalendarEvent | None:
-        """Zwraca nastepne nadchodzace wydarzenie."""
+        """Zwraca trwajace lub najblizsze nadchodzace wydarzenie."""
         events = self._get_events()
         if not events:
             return None
             
-        now = datetime.now(_STREFA_PL)
-        future_events = [e for e in events if e.start_datetime_local >= now]
-        if future_events:
-            return sorted(future_events, key=lambda e: e.start_datetime_local)[0]
-        return None
+        return _biezace_lub_nastepne(events, datetime.now(_STREFA_PL))
 
     def _get_events(self) -> List[CalendarEvent]:
         """Pobiera i formatuje wydarzenia z koordynatora."""
@@ -134,11 +152,7 @@ class LibrusTimetableCalendar(CoordinatorEntity, CalendarEntity):
         self, hass: HomeAssistant, start_date: datetime, end_date: datetime
     ) -> List[CalendarEvent]:
         """Zwraca wydarzenia dla danego zakresu dat."""
-        events = self._get_events()
-        return [
-            e for e in events 
-            if e.start_datetime_local >= start_date and e.start_datetime_local < end_date
-        ]
+        return _w_zakresie(self._get_events(), start_date, end_date)
 
 
 class LibrusScheduleCalendar(CoordinatorEntity, CalendarEntity):
@@ -163,11 +177,7 @@ class LibrusScheduleCalendar(CoordinatorEntity, CalendarEntity):
         if not events:
             return None
             
-        now = datetime.now(_STREFA_PL)
-        future_events = [e for e in events if e.start_datetime_local >= now]
-        if future_events:
-            return sorted(future_events, key=lambda e: e.start_datetime_local)[0]
-        return None
+        return _biezace_lub_nastepne(events, datetime.now(_STREFA_PL))
 
     def _get_events(self) -> List[CalendarEvent]:
         events = []
@@ -230,8 +240,4 @@ class LibrusScheduleCalendar(CoordinatorEntity, CalendarEntity):
     async def async_get_events(
         self, hass: HomeAssistant, start_date: datetime, end_date: datetime
     ) -> List[CalendarEvent]:
-        events = self._get_events()
-        return [
-            e for e in events 
-            if e.start_datetime_local >= start_date and e.start_datetime_local < end_date
-        ]
+        return _w_zakresie(self._get_events(), start_date, end_date)
